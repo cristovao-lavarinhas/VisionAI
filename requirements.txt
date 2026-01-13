@@ -1,1 +1,10 @@
 streamlit
+opencv-python-headless
+ultralytics
+scikit-learn
+fpdf
+google-generativeai
+numpy
+matplotlib
+pandas
+seaborn
