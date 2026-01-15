@@ -1,29 +1,27 @@
 import streamlit as st
 from transformers import AutoProcessor, AutoModelForCausalLM
 from ultralytics import YOLO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image
 import torch
 import cv2
 import tempfile
 import os
 import time
+import json
+import networkx as nx
+import matplotlib.pyplot as plt
+from collections import Counter
 
-# Configuracao da pagina
 st.set_page_config(page_title="YOLO + Florence-2", layout="wide")
 st.title("YOLO + Florence-2: Detecção e Analise Avancada")
 
-# Cache dos modelos
 @st.cache_resource
 def load_yolo_model(model_name="yolov8n.pt"):
-    """Carrega modelo YOLO"""
     return YOLO(model_name)
 
 @st.cache_resource
 def load_florence_model():
-    """Carrega modelo Florence-2"""
     model_id = "microsoft/Florence-2-base-ft"
-    
-    # Verifica se tem GPU disponivel
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.float16 if torch.cuda.is_available() else torch.float32
     
@@ -36,26 +34,17 @@ def load_florence_model():
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     return model, processor, device, dtype
 
-# Funcao para deteccao YOLO
 def detect_with_yolo(image, confidence):
-    """Executa deteccao YOLO e retorna resultados"""
     yolo_model = load_yolo_model()
     results = yolo_model.predict(image, conf=confidence, verbose=False)
     return results[0]
 
-# Funcao para analise Florence-2 com contexto detalhado
 def analyze_with_florence(image, task_prompt, text_input=None):
-    """Executa analise Florence-2"""
     model, processor, device, dtype = load_florence_model()
-    
     prompt = task_prompt + (text_input if text_input else "")
-    
     inputs = processor(text=prompt, images=image, return_tensors="pt")
-    
-    # Move inputs para o device correto e converte para o tipo correto
     inputs = {k: v.to(device) for k, v in inputs.items()}
     
-    # Converte pixel_values para o mesmo dtype do modelo
     if 'pixel_values' in inputs:
         inputs['pixel_values'] = inputs['pixel_values'].to(dtype)
     
@@ -77,37 +66,172 @@ def analyze_with_florence(image, task_prompt, text_input=None):
     
     return parsed_answer
 
-# Funcao para gerar descricao ultra detalhada
-def get_detailed_scene_description(image):
-    """Gera descricao detalhada da cena incluindo objetos, interacoes e contexto"""
+def analyze_image_complete(image, confidence):
+    results = {}
     
-    # Primeira passagem: descricao geral muito detalhada
-    detailed_caption = analyze_with_florence(image, "<MORE_DETAILED_CAPTION>")
+    yolo_results = detect_with_yolo(image, confidence)
+    boxes = yolo_results.boxes
     
-    # Segunda passagem: deteccao de objetos
-    object_detection = analyze_with_florence(image, "<OD>")
+    class_counts = {}
+    detections_list = []
+    for box in boxes:
+        cls_id = int(box.cls[0])
+        cls_name = yolo_results.names[cls_id]
+        class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
+        
+        detections_list.append({
+            "classe": cls_name,
+            "confianca": float(box.conf[0]),
+            "bbox": box.xyxy[0].cpu().numpy().tolist()
+        })
     
-    # Terceira passagem: legendas de regioes densas
-    dense_caption = analyze_with_florence(image, "<DENSE_REGION_CAPTION>")
-    
-    # Quarta passagem: OCR se houver texto
-    ocr_result = analyze_with_florence(image, "<OCR>")
-    
-    result = {
-        "descricao_geral": detailed_caption.get('<MORE_DETAILED_CAPTION>', ''),
-        "objetos_detectados": object_detection,
-        "descricao_regioes": dense_caption,
-        "texto_extraido": ocr_result
+    results['yolo'] = {
+        "total_objetos": len(boxes),
+        "classes": class_counts,
+        "deteccoes": detections_list,
+        "imagem_anotada": yolo_results.plot()
     }
     
-    return result
-
-# Funcao para adicionar texto formatado ao frame
-def add_text_to_frame(frame, text, position=(10, 30), font_scale=0.7, thickness=2, bg_color=(0, 0, 0)):
-    """Adiciona texto com fundo ao frame do video"""
-    font = cv2.FONT_HERSHEY_SIMPLEX
+    st.text("Gerando descricao detalhada...")
+    detailed_caption = analyze_with_florence(image, "<MORE_DETAILED_CAPTION>")
     
-    # Divide texto em linhas se for muito longo
+    st.text("Detectando objetos com Florence-2...")
+    object_detection = analyze_with_florence(image, "<OD>")
+    
+    st.text("Analisando regioes da imagem...")
+    dense_caption = analyze_with_florence(image, "<DENSE_REGION_CAPTION>")
+    
+    results['florence'] = {
+        "descricao_detalhada": detailed_caption.get('<MORE_DETAILED_CAPTION>', ''),
+        "objetos_detectados": object_detection,
+        "regioes_densas": dense_caption
+    }
+    
+    return results
+
+def create_detection_graph(data):
+    G = nx.Graph()
+    
+    central_node = "Analise\nImagem"
+    G.add_node(central_node, node_type="root", size=5000)
+    
+    if 'yolo' in data:
+        yolo_main = "YOLO"
+        G.add_node(yolo_main, node_type="yolo_main", size=4000)
+        G.add_edge(central_node, yolo_main, weight=3)
+        
+        for cls_name, count in data['yolo']['classes'].items():
+            node_name = f"{cls_name}"
+            G.add_node(node_name, node_type="yolo_class", size=2000 + count * 500, count=count)
+            G.add_edge(yolo_main, node_name, weight=count)
+    
+    if 'florence' in data:
+        florence_main = "Florence-2"
+        G.add_node(florence_main, node_type="florence_main", size=4000)
+        G.add_edge(central_node, florence_main, weight=3)
+        
+        if data['florence']['objetos_detectados']:
+            obj_florence = data['florence']['objetos_detectados'].get('<OD>', {})
+            if isinstance(obj_florence, dict) and 'labels' in obj_florence:
+                labels_count = Counter(obj_florence['labels'])
+                for label, count in list(labels_count.items())[:8]:
+                    node_name = f"{label}"
+                    G.add_node(node_name, node_type="florence_obj", size=2000 + count * 300, count=count)
+                    G.add_edge(florence_main, node_name, weight=count)
+        
+        desc_node = "Descricao\nContextual"
+        G.add_node(desc_node, node_type="florence_desc", size=2500)
+        G.add_edge(florence_main, desc_node, weight=2)
+    
+    return G
+
+def plot_network_graph(G):
+    fig, ax = plt.subplots(figsize=(16, 12), facecolor='white')
+    
+    pos = nx.spring_layout(G, k=1.5, iterations=50, seed=42)
+    
+    node_colors = []
+    node_sizes = []
+    
+    for node in G.nodes():
+        node_type = G.nodes[node].get('node_type', 'default')
+        size = G.nodes[node].get('size', 2000)
+        
+        if node_type == 'root':
+            node_colors.append('#FF6B6B')
+        elif node_type == 'yolo_main':
+            node_colors.append('#4ECDC4')
+        elif node_type == 'yolo_class':
+            node_colors.append('#FFE66D')
+        elif node_type == 'florence_main':
+            node_colors.append('#95E1D3')
+        elif node_type == 'florence_obj':
+            node_colors.append('#A8E6CF')
+        elif node_type == 'florence_desc':
+            node_colors.append('#DDA0DD')
+        else:
+            node_colors.append('#D3D3D3')
+        
+        node_sizes.append(size)
+    
+    edges = G.edges()
+    weights = [G[u][v].get('weight', 1) for u, v in edges]
+    
+    nx.draw_networkx_edges(
+        G, pos,
+        width=[w * 0.5 for w in weights],
+        alpha=0.4,
+        edge_color='gray',
+        ax=ax
+    )
+    
+    nx.draw_networkx_nodes(
+        G, pos,
+        node_color=node_colors,
+        node_size=node_sizes,
+        alpha=0.9,
+        linewidths=2,
+        edgecolors='black',
+        ax=ax
+    )
+    
+    labels = {}
+    for node in G.nodes():
+        count = G.nodes[node].get('count', None)
+        if count and count > 1:
+            labels[node] = f"{node}\n({count})"
+        else:
+            labels[node] = node
+    
+    nx.draw_networkx_labels(
+        G, pos,
+        labels,
+        font_size=10,
+        font_weight='bold',
+        font_family='sans-serif',
+        ax=ax
+    )
+    
+    ax.set_title("Grafo de Deteccoes e Analises", fontsize=18, fontweight='bold', pad=20)
+    ax.axis('off')
+    ax.margins(0.1)
+    
+    legend_elements = [
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#FF6B6B', markersize=12, label='Imagem Central'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#4ECDC4', markersize=12, label='YOLO'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#FFE66D', markersize=12, label='Classes YOLO'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#95E1D3', markersize=12, label='Florence-2'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#A8E6CF', markersize=12, label='Objetos Florence'),
+        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#DDA0DD', markersize=12, label='Descricao'),
+    ]
+    
+    ax.legend(handles=legend_elements, loc='upper right', fontsize=10, framealpha=0.9)
+    
+    plt.tight_layout()
+    return fig
+
+def add_text_to_frame(frame, text, position=(10, 30), font_scale=0.7, thickness=2, bg_color=(0, 0, 0)):
+    font = cv2.FONT_HERSHEY_SIMPLEX
     max_width = frame.shape[1] - 20
     words = text.split(' ')
     lines = []
@@ -127,35 +251,27 @@ def add_text_to_frame(frame, text, position=(10, 30), font_scale=0.7, thickness=
     if current_line:
         lines.append(' '.join(current_line))
     
-    # Desenha cada linha
     y_offset = position[1]
-    for line in lines[:3]:  # Limita a 3 linhas
+    for line in lines[:3]:
         (text_width, text_height), baseline = cv2.getTextSize(line, font, font_scale, thickness)
         
-        # Desenha retangulo de fundo
         cv2.rectangle(frame, 
                      (position[0] - 5, y_offset - text_height - 5),
                      (position[0] + text_width + 5, y_offset + baseline + 5),
                      bg_color, -1)
         
-        # Desenha texto
         cv2.putText(frame, line, (position[0], y_offset), font, font_scale, (255, 255, 255), thickness, cv2.LINE_AA)
         y_offset += text_height + 10
     
     return frame
 
-# Funcao para processar video com anotacoes
 def process_video_with_annotations(video_path, confidence, frame_skip=30, add_florence=True):
-    """Processa video frame a frame e gera video anotado"""
     cap = cv2.VideoCapture(video_path)
-    
-    # Propriedades do video
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
     fps = int(cap.get(cv2.CAP_PROP_FPS))
     frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
-    # Cria arquivo de saida temporario
     output_path = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4').name
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')
     out = cv2.VideoWriter(output_path, fourcc, fps, (frame_width, frame_height))
@@ -172,18 +288,13 @@ def process_video_with_annotations(video_path, confidence, frame_skip=30, add_fl
         if not ret:
             break
         
-        # Converte BGR para RGB para processamento
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
         
-        # Deteccao YOLO
         yolo_results = detect_with_yolo(pil_image, confidence)
-        
-        # Desenha deteccoes YOLO no frame
         annotated_frame = yolo_results.plot()
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
         
-        # Contagem de objetos
         boxes = yolo_results.boxes
         class_counts = {}
         for box in boxes:
@@ -191,12 +302,10 @@ def process_video_with_annotations(video_path, confidence, frame_skip=30, add_fl
             cls_name = yolo_results.names[cls_id]
             class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
         
-        # Adiciona contador de objetos
         obj_count_text = f"Objetos: {len(boxes)}"
         cv2.putText(annotated_frame, obj_count_text, (10, frame_height - 20), 
                    cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2, cv2.LINE_AA)
         
-        # Gera caption com Florence-2 periodicamente
         if add_florence and frame_idx % frame_skip == 0:
             try:
                 florence_result = analyze_with_florence(pil_image, "<CAPTION>")
@@ -205,15 +314,12 @@ def process_video_with_annotations(video_path, confidence, frame_skip=30, add_fl
             except Exception as e:
                 status_text.text(f"Frame {frame_idx}/{frame_count} - Usando caption anterior")
         
-        # Adiciona caption ao frame
         if add_florence and last_caption:
             annotated_frame = add_text_to_frame(annotated_frame, last_caption, (10, 30))
         
-        # Escreve frame anotado
         out.write(annotated_frame)
-        
-        # Atualiza progresso
         progress_bar.progress(min(frame_idx / frame_count, 1.0))
+        
         if frame_idx % 10 == 0:
             status_text.text(f"Processando frame {frame_idx}/{frame_count}")
         
@@ -234,29 +340,18 @@ def process_video_with_annotations(video_path, confidence, frame_skip=30, add_fl
     
     return output_path, results_data
 
-# Funcao para criar ROIs a partir de deteccoes YOLO
-def extract_roi_from_yolo(image, box):
-    """Extrai regiao de interesse da deteccao YOLO"""
-    x1, y1, x2, y2 = map(int, box.xyxy[0].cpu().numpy())
-    roi = image.crop((x1, y1, x2, y2))
-    return roi, (x1, y1, x2, y2)
-
-# Sidebar - Configuracoes
 st.sidebar.header("Configuracoes")
 
-# Selecao de tipo de entrada
 input_type = st.sidebar.radio(
     "Tipo de Entrada:",
     ["Imagem", "Video"]
 )
 
-# Selecao de modo
 mode = st.sidebar.radio(
     "Modo de Operacao:",
     ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO", "Apenas Florence-2"]
 )
 
-# Configuracoes YOLO
 if mode in ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO"]:
     st.sidebar.subheader("YOLO Settings")
     yolo_model_choice = st.sidebar.selectbox(
@@ -265,267 +360,255 @@ if mode in ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO"]:
     )
     confidence = st.sidebar.slider("Confianca YOLO:", 0.1, 1.0, 0.5, 0.05)
 
-# Configuracoes Florence-2
-if mode in ["YOLO + Florence-2 (Hibrido)", "Apenas Florence-2"]:
-    st.sidebar.subheader("Florence-2 Settings")
-    detailed_analysis = st.sidebar.checkbox("Analise Ultra Detalhada", value=True, 
-                                           help="Inclui interacoes, contexto e multiplas camadas de analise")
-
-# Configuracoes de video
 if input_type == "Video":
     st.sidebar.subheader("Video Settings")
     frame_skip = st.sidebar.slider("Gerar caption a cada N frames:", 15, 90, 30)
     add_florence_captions = st.sidebar.checkbox("Adicionar Captions Florence-2", value=True)
 
-# Upload de arquivo
 if input_type == "Imagem":
     uploaded_file = st.file_uploader("Upload uma imagem", type=['png', 'jpg', 'jpeg'])
 else:
     uploaded_file = st.file_uploader("Upload um video", type=['mp4', 'avi', 'mov', 'mkv'])
 
-# Processamento de IMAGEM
 if input_type == "Imagem" and uploaded_file:
     image = Image.open(uploaded_file).convert('RGB')
     
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([3, 1])
     
     with col1:
         st.subheader("Imagem Original")
         st.image(image, use_container_width=True)
     
-    # Botao de processamento
-    if st.button("Processar", type="primary"):
-        with col2:
-            st.subheader("Resultados")
+    with col2:
+        st.write("")
+        st.write("")
+        process_button = st.button("Processar Imagem", type="primary", use_container_width=True)
+    
+    if process_button:
+        with st.spinner("Processando imagem completa..."):
             
-            # Modo: Apenas YOLO
             if mode == "Apenas YOLO":
-                with st.spinner("Detectando com YOLO..."):
-                    results = detect_with_yolo(image, confidence)
-                    
-                    # Imagem anotada
+                results = detect_with_yolo(image, confidence)
+                boxes = results.boxes
+                
+                st.subheader("Resultados da Analise")
+                
+                col_r1, col_r2 = st.columns([2, 1])
+                
+                with col_r1:
+                    st.write("**Imagem com Deteccoes:**")
                     annotated_img = results.plot()
-                    st.image(annotated_img, caption="Deteccoes YOLO", use_container_width=True)
-                    
-                    # Estatisticas
-                    boxes = results.boxes
+                    st.image(annotated_img, use_container_width=True)
+                
+                with col_r2:
                     st.metric("Objetos Detectados", len(boxes))
-                    
-                    # Contagem por classe
-                    if len(boxes) > 0:
-                        class_counts = {}
-                        for box in boxes:
-                            cls_id = int(box.cls[0])
-                            cls_name = results.names[cls_id]
-                            class_counts[cls_name] = class_counts.get(cls_name, 0) + 1
-                        
-                        st.write("**Contagem por Classe:**")
-                        for cls_name, count in class_counts.items():
-                            st.write(f"- {cls_name}: {count}")
-                        
-                        # Opcao para ver JSON
-                        if st.checkbox("Ver JSON completo", key="yolo_json"):
-                            json_data = {
-                                "total_objetos": len(boxes),
-                                "classes": class_counts,
-                                "deteccoes": []
-                            }
-                            for box in boxes:
-                                json_data["deteccoes"].append({
-                                    "classe": results.names[int(box.cls[0])],
-                                    "confianca": float(box.conf[0]),
-                                    "bbox": box.xyxy[0].cpu().numpy().tolist()
-                                })
-                            st.json(json_data)
+                
+                json_data = {
+                    "total_objetos": len(boxes),
+                    "classes": {},
+                    "deteccoes": []
+                }
+                
+                for box in boxes:
+                    cls_id = int(box.cls[0])
+                    cls_name = results.names[cls_id]
+                    json_data["classes"][cls_name] = json_data["classes"].get(cls_name, 0) + 1
+                    json_data["deteccoes"].append({
+                        "classe": cls_name,
+                        "confianca": float(box.conf[0]),
+                        "bbox": box.xyxy[0].cpu().numpy().tolist()
+                    })
+                
+                st.write("---")
+                st.subheader("Grafo de Deteccoes")
+                
+                graph_data = {"yolo": json_data}
+                G = create_detection_graph(graph_data)
+                fig = plot_network_graph(G)
+                st.pyplot(fig)
+                plt.close()
+                
+                st.write("---")
+                with st.expander("Ver JSON Completo"):
+                    st.json(json_data)
+                
+                json_str = json.dumps(json_data, indent=2)
+                st.download_button(
+                    label="Download JSON",
+                    data=json_str,
+                    file_name="yolo_analysis.json",
+                    mime="application/json"
+                )
             
-            # Modo: Apenas Florence-2
             elif mode == "Apenas Florence-2":
-                with st.spinner("Analisando com Florence-2..."):
-                    if detailed_analysis:
-                        result = get_detailed_scene_description(image)
-                        
-                        st.write("**Descricao Geral da Cena:**")
-                        st.markdown(f"_{result['descricao_geral']}_")
-                        
-                        st.write("**Descricao de Regioes e Interacoes:**")
-                        dense_regions = result['descricao_regioes'].get('<DENSE_REGION_CAPTION>', {})
-                        if isinstance(dense_regions, dict) and 'labels' in dense_regions:
-                            for label in dense_regions['labels']:
-                                st.write(f"- {label}")
-                        
-                        if result['texto_extraido'].get('<OCR>', ''):
-                            st.write("**Texto Encontrado na Imagem:**")
-                            st.info(result['texto_extraido']['<OCR>'])
-                        
-                        # Opcao para ver JSON
-                        if st.checkbox("Ver JSON completo", key="florence_json"):
-                            st.json(result)
-                    else:
-                        result = analyze_with_florence(image, "<MORE_DETAILED_CAPTION>")
-                        st.write("**Resultado Florence-2:**")
-                        for key, value in result.items():
-                            if isinstance(value, str):
-                                st.markdown(f"**{key}:**")
-                                st.write(value)
-                            else:
-                                st.json({key: value})
+                st.text("Executando analises Florence-2...")
+                
+                detailed_caption = analyze_with_florence(image, "<MORE_DETAILED_CAPTION>")
+                object_detection = analyze_with_florence(image, "<OD>")
+                dense_caption = analyze_with_florence(image, "<DENSE_REGION_CAPTION>")
+                
+                st.subheader("Resultados da Analise")
+                
+                st.write("**Descricao Detalhada da Imagem:**")
+                st.markdown(f"_{detailed_caption.get('<MORE_DETAILED_CAPTION>', 'N/A')}_")
+                
+                florence_json = {
+                    "descricao_detalhada": detailed_caption.get('<MORE_DETAILED_CAPTION>', ''),
+                    "objetos_detectados": object_detection,
+                    "regioes_densas": dense_caption
+                }
+                
+                st.write("---")
+                st.subheader("Grafo de Analise")
+                
+                graph_data = {"florence": florence_json}
+                G = create_detection_graph(graph_data)
+                fig = plot_network_graph(G)
+                st.pyplot(fig)
+                plt.close()
+                
+                st.write("---")
+                with st.expander("Ver JSON Completo"):
+                    st.json(florence_json)
+                
+                json_str = json.dumps(florence_json, indent=2, ensure_ascii=False)
+                st.download_button(
+                    label="Download JSON",
+                    data=json_str,
+                    file_name="florence_analysis.json",
+                    mime="application/json"
+                )
             
-            # Modo: Hibrido YOLO + Florence-2
             else:
-                with st.spinner("Detectando com YOLO..."):
-                    yolo_results = detect_with_yolo(image, confidence)
-                    boxes = yolo_results.boxes
-                    
-                    st.write(f"**YOLO detectou {len(boxes)} objetos**")
-                    
-                    # Mostra imagem com deteccoes YOLO
-                    annotated_img = yolo_results.plot()
-                    st.image(annotated_img, caption="Deteccoes YOLO", use_container_width=True)
+                analysis_results = analyze_image_complete(image, confidence)
                 
-                # Analise Florence-2 da imagem completa
-                with st.spinner("Analisando contexto com Florence-2..."):
-                    if detailed_analysis:
-                        florence_result = get_detailed_scene_description(image)
-                        
-                        st.write("**Descricao Contextual Completa:**")
-                        st.markdown(f"_{florence_result['descricao_geral']}_")
-                        
-                        st.write("**Analise de Interacoes e Elementos:**")
-                        dense_regions = florence_result['descricao_regioes'].get('<DENSE_REGION_CAPTION>', {})
-                        if isinstance(dense_regions, dict) and 'labels' in dense_regions:
-                            for idx, label in enumerate(dense_regions['labels'][:10]):
-                                st.write(f"{idx+1}. {label}")
-                        
-                        if florence_result['texto_extraido'].get('<OCR>', ''):
-                            st.write("**Texto Detectado:**")
-                            st.info(florence_result['texto_extraido']['<OCR>'])
-                        
-                        # JSON completo
-                        if st.checkbox("Ver JSON completo da analise", key="hybrid_json"):
-                            combined_json = {
-                                "yolo_deteccoes": {
-                                    "total_objetos": len(boxes),
-                                    "classes": {}
-                                },
-                                "florence_analise": florence_result
-                            }
-                            
-                            for box in boxes:
-                                cls_name = yolo_results.names[int(box.cls[0])]
-                                if cls_name not in combined_json["yolo_deteccoes"]["classes"]:
-                                    combined_json["yolo_deteccoes"]["classes"][cls_name] = 0
-                                combined_json["yolo_deteccoes"]["classes"][cls_name] += 1
-                            
-                            st.json(combined_json)
-                    else:
-                        florence_result = analyze_with_florence(image, "<MORE_DETAILED_CAPTION>")
-                        description = florence_result.get('<MORE_DETAILED_CAPTION>', 'N/A')
-                        st.write("**Descricao Detalhada da Imagem:**")
-                        st.markdown(f"_{description}_")
+                st.subheader("Resultados da Analise Completa")
                 
-                # Analise detalhada de cada objeto detectado
-                if len(boxes) > 0 and st.checkbox("Analisar cada objeto com Florence-2", value=False):
-                    st.write("---")
-                    st.write("**Analise Individual dos Objetos:**")
-                    
-                    for idx, box in enumerate(boxes[:5]):
-                        cls_id = int(box.cls[0])
-                        cls_name = yolo_results.names[cls_id]
-                        conf = float(box.conf[0])
-                        
-                        with st.expander(f"Objeto {idx+1}: {cls_name} ({conf:.2%})"):
-                            roi, coords = extract_roi_from_yolo(image, box)
-                            
-                            col_a, col_b = st.columns(2)
-                            
-                            with col_a:
-                                st.image(roi, caption=f"ROI: {cls_name}", use_container_width=True)
-                            
-                            with col_b:
-                                florence_roi = analyze_with_florence(roi, "<DETAILED_CAPTION>")
-                                desc = florence_roi.get('<DETAILED_CAPTION>', 'N/A')
-                                st.write(f"**Descricao:** {desc}")
-                                st.write(f"**Coordenadas:** {coords}")
+                st.write("### Deteccao de Objetos (YOLO)")
+                col_y1, col_y2 = st.columns([2, 1])
+                
+                with col_y1:
+                    st.image(analysis_results['yolo']['imagem_anotada'], 
+                            caption="Deteccoes YOLO", use_container_width=True)
+                
+                with col_y2:
+                    st.metric("Objetos Detectados", analysis_results['yolo']['total_objetos'])
+                
+                st.write("### Analise Contextual (Florence-2)")
+                st.write("**Descricao da Cena:**")
+                st.markdown(f"_{analysis_results['florence']['descricao_detalhada']}_")
+                
+                st.write("---")
+                st.subheader("Grafo de Analise Completa")
+                
+                combined_json = {
+                    "yolo_deteccoes": {
+                        "total_objetos": analysis_results['yolo']['total_objetos'],
+                        "classes": analysis_results['yolo']['classes'],
+                        "deteccoes": analysis_results['yolo']['deteccoes']
+                    },
+                    "florence_analise": analysis_results['florence']
+                }
+                
+                graph_data = {
+                    "yolo": combined_json["yolo_deteccoes"],
+                    "florence": combined_json["florence_analise"]
+                }
+                
+                G = create_detection_graph(graph_data)
+                fig = plot_network_graph(G)
+                st.pyplot(fig)
+                plt.close()
+                
+                st.write("---")
+                with st.expander("Ver JSON Completo"):
+                    st.json(combined_json)
+                
+                json_str = json.dumps(combined_json, indent=2, ensure_ascii=False)
+                st.download_button(
+                    label="Download JSON Completo",
+                    data=json_str,
+                    file_name="analise_completa.json",
+                    mime="application/json"
+                )
 
-# Processamento de VIDEO
 elif input_type == "Video" and uploaded_file:
-    # Salva video temporariamente
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
     tfile.write(uploaded_file.read())
-    tfile.close()  # Fecha o arquivo antes de usar
+    tfile.close()
     video_path = tfile.name
     
-    st.subheader("Video Carregado")
-    st.video(video_path)
+    col_v1, col_v2 = st.columns([3, 1])
     
-    if st.button("Processar Video", type="primary"):
+    with col_v1:
+        st.subheader("Video Original")
+        st.video(video_path)
+    
+    with col_v2:
+        st.write("")
+        st.write("")
+        process_video_button = st.button("Processar Video", type="primary", use_container_width=True)
+    
+    if process_video_button:
         st.subheader("Processamento em Andamento")
         
-        # Processa video com anotacoes
         output_video_path, results_data = process_video_with_annotations(
             video_path, confidence, frame_skip, add_florence_captions
         )
         
         st.success(f"Video processado! Analisados {len(results_data)} frames")
         
-        # Mostra video processado
-        st.subheader("Video Processado com Anotacoes")
-        st.video(output_video_path)
-        
-        # Botao para download do video
-        with open(output_video_path, 'rb') as f:
-            video_bytes = f.read()
-            st.download_button(
-                label="Download Video Anotado",
-                data=video_bytes,
-                file_name="video_anotado_yolo_florence.mp4",
-                mime="video/mp4"
-            )
-        
-        # Estatisticas gerais
         col1, col2, col3 = st.columns(3)
         
         total_objects = sum([r['objetos_detectados'] for r in results_data])
         avg_objects = total_objects / len(results_data) if results_data else 0
         
         with col1:
-            st.metric("Total de Objetos Detectados", total_objects)
+            st.metric("Total de Objetos", total_objects)
         with col2:
             st.metric("Media por Frame", f"{avg_objects:.1f}")
         with col3:
             st.metric("Frames Analisados", len(results_data))
         
-        # Timeline de deteccoes
         st.write("**Timeline de Deteccoes:**")
-        for r in results_data[::max(1, len(results_data)//20)]:  # Mostra amostra de 20
-            caption_info = f" - Caption: {r['caption'][:50]}..." if r['caption'] else ""
-            st.write(f"Frame {r['frame']} ({r['tempo_segundos']:.1f}s): {r['objetos_detectados']} objetos - {r['contagem_classes']}{caption_info}")
+        timeline_container = st.container()
+        with timeline_container:
+            for r in results_data[::max(1, len(results_data)//20)]:
+                caption_info = f" - {r['caption'][:50]}..." if r['caption'] else ""
+                st.write(f"Frame {r['frame']} ({r['tempo_segundos']:.1f}s): {r['objetos_detectados']} objetos{caption_info}")
         
-        # JSON completo
-        if st.checkbox("Ver JSON completo do video", key="video_json"):
-            st.json(results_data)
+        st.write("---")
+        st.subheader("Download dos Resultados")
         
-        # Exportar resultados
-        if st.button("Exportar Resultados JSON"):
-            import json
+        col_d1, col_d2 = st.columns(2)
+        
+        with col_d1:
+            with open(output_video_path, 'rb') as f:
+                video_bytes = f.read()
+                st.download_button(
+                    label="Download Video Anotado",
+                    data=video_bytes,
+                    file_name="video_anotado_yolo_florence.mp4",
+                    mime="video/mp4",
+                    use_container_width=True
+                )
+        
+        with col_d2:
             json_str = json.dumps(results_data, indent=2)
             st.download_button(
                 label="Download JSON",
                 data=json_str,
-                file_name="video_analysis_results.json",
-                mime="application/json"
+                file_name="video_analysis.json",
+                mime="application/json",
+                use_container_width=True
             )
         
-        # Limpa video processado depois de mostrar
-        time.sleep(1)
+        with st.expander("Ver JSON Completo"):
+            st.json(results_data)
+        
         try:
+            time.sleep(0.5)
             if os.path.exists(output_video_path):
                 os.unlink(output_video_path)
         except:
             pass
-    
-    # Limpa arquivo temporario original quando sair da pagina
-    # Usa session state para controlar a limpeza
-    if 'temp_video_path' not in st.session_state:
-        st.session_state.temp_video_path = video_path
-
