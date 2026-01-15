@@ -39,10 +39,10 @@ def detect_with_yolo(image, confidence):
     results = yolo_model.predict(image, conf=confidence, verbose=False)
     return results[0]
 
-def analyze_with_florence(image, task_prompt, text_input=None):
+def analyze_with_florence(image, task_prompt):
     model, processor, device, dtype = load_florence_model()
-    prompt = task_prompt + (text_input if text_input else "")
-    inputs = processor(text=prompt, images=image, return_tensors="pt")
+    
+    inputs = processor(text=task_prompt, images=image, return_tensors="pt")
     inputs = {k: v.to(device) for k, v in inputs.items()}
     
     if 'pixel_values' in inputs:
@@ -571,11 +571,9 @@ elif input_type == "Video" and uploaded_file:
             st.metric("Frames Analisados", len(results_data))
         
         st.write("**Timeline de Deteccoes:**")
-        timeline_container = st.container()
-        with timeline_container:
-            for r in results_data[::max(1, len(results_data)//20)]:
-                caption_info = f" - {r['caption'][:50]}..." if r['caption'] else ""
-                st.write(f"Frame {r['frame']} ({r['tempo_segundos']:.1f}s): {r['objetos_detectados']} objetos{caption_info}")
+        for r in results_data[::max(1, len(results_data)//20)]:
+            caption_info = f" - {r['caption'][:50]}..." if r['caption'] else ""
+            st.write(f"Frame {r['frame']} ({r['tempo_segundos']:.1f}s): {r['objetos_detectados']} objetos{caption_info}")
         
         st.write("---")
         st.subheader("Download dos Resultados")
