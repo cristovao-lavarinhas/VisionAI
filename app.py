@@ -8,16 +8,15 @@ import tempfile
 import os
 import time
 import json
-import networkx as nx
-import matplotlib.pyplot as plt
-from collections import Counter
+
 
 st.set_page_config(page_title="YOLO + Florence-2", layout="wide")
-st.title("YOLO + Florence-2: Detecção e Analise Avancada")
+
 
 @st.cache_resource
 def load_yolo_model(model_name="yolov8n.pt"):
     return YOLO(model_name)
+
 
 @st.cache_resource
 def load_florence_model():
@@ -34,10 +33,12 @@ def load_florence_model():
     processor = AutoProcessor.from_pretrained(model_id, trust_remote_code=True)
     return model, processor, device, dtype
 
+
 def detect_with_yolo(image, confidence):
     yolo_model = load_yolo_model()
     results = yolo_model.predict(image, conf=confidence, verbose=False)
     return results[0]
+
 
 def analyze_with_florence(image, task_prompt):
     model, processor, device, dtype = load_florence_model()
@@ -65,6 +66,7 @@ def analyze_with_florence(image, task_prompt):
     )
     
     return parsed_answer
+
 
 def analyze_image_complete(image, confidence):
     results = {}
@@ -109,126 +111,6 @@ def analyze_image_complete(image, confidence):
     
     return results
 
-def create_detection_graph(data):
-    G = nx.Graph()
-    
-    central_node = "Analise\nImagem"
-    G.add_node(central_node, node_type="root", size=5000)
-    
-    if 'yolo' in data:
-        yolo_main = "YOLO"
-        G.add_node(yolo_main, node_type="yolo_main", size=4000)
-        G.add_edge(central_node, yolo_main, weight=3)
-        
-        for cls_name, count in data['yolo']['classes'].items():
-            node_name = f"{cls_name}"
-            G.add_node(node_name, node_type="yolo_class", size=2000 + count * 500, count=count)
-            G.add_edge(yolo_main, node_name, weight=count)
-    
-    if 'florence' in data:
-        florence_main = "Florence-2"
-        G.add_node(florence_main, node_type="florence_main", size=4000)
-        G.add_edge(central_node, florence_main, weight=3)
-        
-        if data['florence']['objetos_detectados']:
-            obj_florence = data['florence']['objetos_detectados'].get('<OD>', {})
-            if isinstance(obj_florence, dict) and 'labels' in obj_florence:
-                labels_count = Counter(obj_florence['labels'])
-                for label, count in list(labels_count.items())[:8]:
-                    node_name = f"{label}"
-                    G.add_node(node_name, node_type="florence_obj", size=2000 + count * 300, count=count)
-                    G.add_edge(florence_main, node_name, weight=count)
-        
-        desc_node = "Descricao\nContextual"
-        G.add_node(desc_node, node_type="florence_desc", size=2500)
-        G.add_edge(florence_main, desc_node, weight=2)
-    
-    return G
-
-def plot_network_graph(G):
-    fig, ax = plt.subplots(figsize=(16, 12), facecolor='white')
-    
-    pos = nx.spring_layout(G, k=1.5, iterations=50, seed=42)
-    
-    node_colors = []
-    node_sizes = []
-    
-    for node in G.nodes():
-        node_type = G.nodes[node].get('node_type', 'default')
-        size = G.nodes[node].get('size', 2000)
-        
-        if node_type == 'root':
-            node_colors.append('#FF6B6B')
-        elif node_type == 'yolo_main':
-            node_colors.append('#4ECDC4')
-        elif node_type == 'yolo_class':
-            node_colors.append('#FFE66D')
-        elif node_type == 'florence_main':
-            node_colors.append('#95E1D3')
-        elif node_type == 'florence_obj':
-            node_colors.append('#A8E6CF')
-        elif node_type == 'florence_desc':
-            node_colors.append('#DDA0DD')
-        else:
-            node_colors.append('#D3D3D3')
-        
-        node_sizes.append(size)
-    
-    edges = G.edges()
-    weights = [G[u][v].get('weight', 1) for u, v in edges]
-    
-    nx.draw_networkx_edges(
-        G, pos,
-        width=[w * 0.5 for w in weights],
-        alpha=0.4,
-        edge_color='gray',
-        ax=ax
-    )
-    
-    nx.draw_networkx_nodes(
-        G, pos,
-        node_color=node_colors,
-        node_size=node_sizes,
-        alpha=0.9,
-        linewidths=2,
-        edgecolors='black',
-        ax=ax
-    )
-    
-    labels = {}
-    for node in G.nodes():
-        count = G.nodes[node].get('count', None)
-        if count and count > 1:
-            labels[node] = f"{node}\n({count})"
-        else:
-            labels[node] = node
-    
-    nx.draw_networkx_labels(
-        G, pos,
-        labels,
-        font_size=10,
-        font_weight='bold',
-        font_family='sans-serif',
-        ax=ax
-    )
-    
-    ax.set_title("Grafo de Deteccoes e Analises", fontsize=18, fontweight='bold', pad=20)
-    ax.axis('off')
-    ax.margins(0.1)
-    
-    legend_elements = [
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#FF6B6B', markersize=12, label='Imagem Central'),
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#4ECDC4', markersize=12, label='YOLO'),
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#FFE66D', markersize=12, label='Classes YOLO'),
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#95E1D3', markersize=12, label='Florence-2'),
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#A8E6CF', markersize=12, label='Objetos Florence'),
-        plt.Line2D([0], [0], marker='o', color='w', markerfacecolor='#DDA0DD', markersize=12, label='Descricao'),
-    ]
-    
-    ax.legend(handles=legend_elements, loc='upper right', fontsize=10, framealpha=0.9)
-    
-    plt.tight_layout()
-    return fig
 
 def add_text_to_frame(frame, text, position=(10, 30), font_scale=0.7, thickness=2, bg_color=(0, 0, 0)):
     font = cv2.FONT_HERSHEY_SIMPLEX
@@ -264,6 +146,7 @@ def add_text_to_frame(frame, text, position=(10, 30), font_scale=0.7, thickness=
         y_offset += text_height + 10
     
     return frame
+
 
 def process_video_with_annotations(video_path, confidence, frame_skip=30, add_florence=True):
     cap = cv2.VideoCapture(video_path)
@@ -340,17 +223,21 @@ def process_video_with_annotations(video_path, confidence, frame_skip=30, add_fl
     
     return output_path, results_data
 
+
 st.sidebar.header("Configuracoes")
+
 
 input_type = st.sidebar.radio(
     "Tipo de Entrada:",
     ["Imagem", "Video"]
 )
 
+
 mode = st.sidebar.radio(
     "Modo de Operacao:",
     ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO", "Apenas Florence-2"]
 )
+
 
 if mode in ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO"]:
     st.sidebar.subheader("YOLO Settings")
@@ -360,15 +247,18 @@ if mode in ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO"]:
     )
     confidence = st.sidebar.slider("Confianca YOLO:", 0.1, 1.0, 0.5, 0.05)
 
+
 if input_type == "Video":
     st.sidebar.subheader("Video Settings")
     frame_skip = st.sidebar.slider("Gerar caption a cada N frames:", 15, 90, 30)
     add_florence_captions = st.sidebar.checkbox("Adicionar Captions Florence-2", value=True)
 
+
 if input_type == "Imagem":
     uploaded_file = st.file_uploader("Upload uma imagem", type=['png', 'jpg', 'jpeg'])
 else:
     uploaded_file = st.file_uploader("Upload um video", type=['mp4', 'avi', 'mov', 'mkv'])
+
 
 if input_type == "Imagem" and uploaded_file:
     image = Image.open(uploaded_file).convert('RGB')
@@ -420,15 +310,6 @@ if input_type == "Imagem" and uploaded_file:
                     })
                 
                 st.write("---")
-                st.subheader("Grafo de Deteccoes")
-                
-                graph_data = {"yolo": json_data}
-                G = create_detection_graph(graph_data)
-                fig = plot_network_graph(G)
-                st.pyplot(fig)
-                plt.close()
-                
-                st.write("---")
                 with st.expander("Ver JSON Completo"):
                     st.json(json_data)
                 
@@ -457,15 +338,6 @@ if input_type == "Imagem" and uploaded_file:
                     "objetos_detectados": object_detection,
                     "regioes_densas": dense_caption
                 }
-                
-                st.write("---")
-                st.subheader("Grafo de Analise")
-                
-                graph_data = {"florence": florence_json}
-                G = create_detection_graph(graph_data)
-                fig = plot_network_graph(G)
-                st.pyplot(fig)
-                plt.close()
                 
                 st.write("---")
                 with st.expander("Ver JSON Completo"):
@@ -499,7 +371,6 @@ if input_type == "Imagem" and uploaded_file:
                 st.markdown(f"_{analysis_results['florence']['descricao_detalhada']}_")
                 
                 st.write("---")
-                st.subheader("Grafo de Analise Completa")
                 
                 combined_json = {
                     "yolo_deteccoes": {
@@ -510,17 +381,6 @@ if input_type == "Imagem" and uploaded_file:
                     "florence_analise": analysis_results['florence']
                 }
                 
-                graph_data = {
-                    "yolo": combined_json["yolo_deteccoes"],
-                    "florence": combined_json["florence_analise"]
-                }
-                
-                G = create_detection_graph(graph_data)
-                fig = plot_network_graph(G)
-                st.pyplot(fig)
-                plt.close()
-                
-                st.write("---")
                 with st.expander("Ver JSON Completo"):
                     st.json(combined_json)
                 
@@ -531,6 +391,7 @@ if input_type == "Imagem" and uploaded_file:
                     file_name="analise_completa.json",
                     mime="application/json"
                 )
+
 
 elif input_type == "Video" and uploaded_file:
     tfile = tempfile.NamedTemporaryFile(delete=False, suffix='.mp4')
