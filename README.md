@@ -24,7 +24,9 @@ streamlit run app.py
 
 Abre em http://localhost:8501. Os pesos do YOLOv8 nano (`yolov8n.pt`) estão
 versionados no repositório; o Florence-2 é descarregado do Hugging Face na
-primeira utilização — cerca de 0,5 GB, uma vez só.
+primeira utilização — cerca de 0,5 GB, uma vez só. Os restantes modelos YOLO
+(`s`, `m`, `l`), escolhidos na barra lateral, também são descarregados quando
+usados pela primeira vez.
 
 O Florence-2 carrega com `trust_remote_code=True`, porque a arquitetura vive no
 próprio repositório do modelo e não no `transformers` — daí o `timm` e o
@@ -44,7 +46,9 @@ Escolhidos na barra lateral, e válidos para imagem ou vídeo.
 | Apenas YOLO | Só caixas, classes e confianças — rápido |
 | Apenas Florence-2 | Só a leitura da cena, sem caixas |
 
-O limiar de confiança do YOLO vai de 0,1 a 1,0 (0,5 por omissão).
+O limiar de confiança do YOLO vai de 0,1 a 1,0 (0,5 por omissão), e o modelo
+escolhe-se entre `yolov8n`, `s`, `m` e `l` — cada um fica com a sua entrada em
+cache, por isso trocar de modelo não recarrega os outros.
 
 ## O que sai
 
@@ -103,8 +107,6 @@ recarregaria o Florence-2 do disco.
 
 ## Limitações conhecidas
 
-- O seletor de modelo YOLO na barra lateral (`yolov8n/s/m/l`) ainda não está
-  ligado ao carregamento — corre sempre o `yolov8n.pt`.
 - Em vídeo, o modo **Apenas Florence-2** falha: o limiar de confiança só é
   definido nos modos que usam YOLO, e o processamento de vídeo pede-o sempre.
 

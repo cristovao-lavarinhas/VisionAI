@@ -34,8 +34,8 @@ def load_florence_model():
     return model, processor, device, dtype
 
 
-def detect_with_yolo(image, confidence):
-    yolo_model = load_yolo_model()
+def detect_with_yolo(image, confidence, model_name="yolov8n.pt"):
+    yolo_model = load_yolo_model(model_name)
     results = yolo_model.predict(image, conf=confidence, verbose=False)
     return results[0]
 
@@ -68,10 +68,10 @@ def analyze_with_florence(image, task_prompt):
     return parsed_answer
 
 
-def analyze_image_complete(image, confidence):
+def analyze_image_complete(image, confidence, model_name="yolov8n.pt"):
     results = {}
     
-    yolo_results = detect_with_yolo(image, confidence)
+    yolo_results = detect_with_yolo(image, confidence, model_name)
     boxes = yolo_results.boxes
     
     class_counts = {}
@@ -148,7 +148,7 @@ def add_text_to_frame(frame, text, position=(10, 30), font_scale=0.7, thickness=
     return frame
 
 
-def process_video_with_annotations(video_path, confidence, frame_skip=30, add_florence=True):
+def process_video_with_annotations(video_path, confidence, frame_skip=30, add_florence=True, model_name="yolov8n.pt"):
     cap = cv2.VideoCapture(video_path)
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -174,7 +174,7 @@ def process_video_with_annotations(video_path, confidence, frame_skip=30, add_fl
         frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         pil_image = Image.fromarray(frame_rgb)
         
-        yolo_results = detect_with_yolo(pil_image, confidence)
+        yolo_results = detect_with_yolo(pil_image, confidence, model_name)
         annotated_frame = yolo_results.plot()
         annotated_frame = cv2.cvtColor(annotated_frame, cv2.COLOR_RGB2BGR)
         
@@ -239,12 +239,16 @@ mode = st.sidebar.radio(
 )
 
 
+yolo_model_choice = "yolov8n.pt"
+
 if mode in ["YOLO + Florence-2 (Hibrido)", "Apenas YOLO"]:
     st.sidebar.subheader("YOLO Settings")
     yolo_model_choice = st.sidebar.selectbox(
         "Modelo YOLO:",
         ["yolov8n.pt", "yolov8s.pt", "yolov8m.pt", "yolov8l.pt"]
     )
+    if yolo_model_choice != "yolov8n.pt":
+        st.sidebar.caption("So o yolov8n esta no repositorio. Os outros sao descarregados na primeira utilizacao.")
     confidence = st.sidebar.slider("Confianca YOLO:", 0.1, 1.0, 0.5, 0.05)
 
 
@@ -278,7 +282,7 @@ if input_type == "Imagem" and uploaded_file:
         with st.spinner("Processando imagem completa..."):
             
             if mode == "Apenas YOLO":
-                results = detect_with_yolo(image, confidence)
+                results = detect_with_yolo(image, confidence, yolo_model_choice)
                 boxes = results.boxes
                 
                 st.subheader("Resultados da Analise")
@@ -352,7 +356,7 @@ if input_type == "Imagem" and uploaded_file:
                 )
             
             else:
-                analysis_results = analyze_image_complete(image, confidence)
+                analysis_results = analyze_image_complete(image, confidence, yolo_model_choice)
                 
                 st.subheader("Resultados da Analise Completa")
                 
@@ -414,7 +418,7 @@ elif input_type == "Video" and uploaded_file:
         st.subheader("Processamento em Andamento")
         
         output_video_path, results_data = process_video_with_annotations(
-            video_path, confidence, frame_skip, add_florence_captions
+            video_path, confidence, frame_skip, add_florence_captions, yolo_model_choice
         )
         
         st.success(f"Video processado! Analisados {len(results_data)} frames")
