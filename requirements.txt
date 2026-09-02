@@ -1,10 +1,10 @@
 streamlit
-opencv-python-headless
 ultralytics
-scikit-learn
-fpdf
-google-generativeai
+transformers
+torch
+torchvision
+timm
+einops
+opencv-python-headless
+pillow
 numpy
-matplotlib
-pandas
-seaborn

@@ -1,0 +1,776 @@
+<!doctype html>
+<html lang="pt">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>VisionAI</title>
+<link rel="icon" type="image/png" sizes="32x32" href="favicon-32.png" />
+<link rel="icon" type="image/png" sizes="180x180" href="favicon.png" />
+<link rel="apple-touch-icon" href="favicon.png" />
+<meta name="description" content="Deteção de objetos e leitura de cenas sobre a mesma imagem: YOLOv8 para as caixas, Florence-2 para a descrição, em imagem e em vídeo." />
+<meta property="og:title" content="VisionAI" />
+<meta property="og:description" content="YOLOv8 dá as caixas. Florence-2 dá as palavras. As duas leituras, no mesmo JSON." />
+<meta property="og:type" content="website" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,700;12..96,800&family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" />
+<style>
+/* ============================================================
+   VisionAI — landing
+   Ideia: a pagina comporta-se como um frame anotado. As seccoes
+   sao caixas com a etiqueta no canto, como um render do YOLO.
+   Dois acentos que codificam a distincao real do projeto:
+   laranja = geometria (caixas), violeta = linguagem (legendas).
+   ============================================================ */
+
+:root {
+  --ground:     #f4f3f0;
+  --ground-alt: #eceae5;
+  --surface:    #ffffff;
+  --rule:       #ddd9d1;
+  --rule-soft:  #e8e5de;
+  --ink:        #161310;
+  --ink-2:      #4a443c;
+  --dim:        #7a7269;
+
+  --box:        #d9490c;   /* geometria — caixas do YOLO */
+  --box-ink:    #ffffff;
+  --word:       #4f3fcc;   /* linguagem — legendas do Florence-2 */
+  --word-ink:   #ffffff;
+  --box-wash:   #fbeee7;
+  --word-wash:  #eeecfb;
+
+  --font-display: 'Bricolage Grotesque', 'IBM Plex Sans', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SFMono-Regular', monospace;
+
+  --maxw: 1080px;
+  --shadow: 0 1px 2px rgba(22, 19, 16, .05), 0 14px 40px -22px rgba(22, 19, 16, .3);
+
+  color-scheme: light;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground:     #131110;
+    --ground-alt: #0d0b0a;
+    --surface:    #1c1917;
+    --rule:       #322c27;
+    --rule-soft:  #262220;
+    --ink:        #f2efea;
+    --ink-2:      #c3bbb1;
+    --dim:        #8d8479;
+
+    --box:        #ff7a3d;
+    --box-ink:    #241000;
+    --word:       #a794ff;
+    --word-ink:   #17102e;
+    --box-wash:   #2a1a11;
+    --word-wash:  #1e1a33;
+
+    --shadow: 0 1px 2px rgba(0, 0, 0, .55), 0 20px 48px -22px rgba(0, 0, 0, .85);
+    color-scheme: dark;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground:     #131110;
+  --ground-alt: #0d0b0a;
+  --surface:    #1c1917;
+  --rule:       #322c27;
+  --rule-soft:  #262220;
+  --ink:        #f2efea;
+  --ink-2:      #c3bbb1;
+  --dim:        #8d8479;
+
+  --box:        #ff7a3d;
+  --box-ink:    #241000;
+  --word:       #a794ff;
+  --word-ink:   #17102e;
+  --box-wash:   #2a1a11;
+  --word-wash:  #1e1a33;
+
+  --shadow: 0 1px 2px rgba(0, 0, 0, .55), 0 20px 48px -22px rgba(0, 0, 0, .85);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 16px;
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+}
+
+a { color: inherit; }
+img, svg { max-width: 100%; }
+
+:where(a, button, [tabindex]):focus-visible {
+  outline: 2px solid var(--box);
+  outline-offset: 3px;
+}
+
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0; }
+
+code {
+  font-family: var(--font-mono);
+  font-size: .87em;
+  background: var(--ground-alt);
+  border: 1px solid var(--rule-soft);
+  border-radius: 3px;
+  padding: .05em .35em;
+}
+
+.wrap { max-width: var(--maxw); margin: 0 auto; padding: 0 26px; }
+
+/* ---------- topo ---------- */
+
+.top {
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  background: var(--ground);
+  border-bottom: 1px solid var(--rule);
+}
+
+.top .wrap { display: flex; align-items: center; gap: 18px; height: 60px; }
+
+.lockup {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  text-decoration: none;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: 1.08rem;
+  letter-spacing: -.02em;
+}
+
+.lockup .ai { color: var(--box); }
+.mark { width: 24px; height: 24px; flex: none; }
+
+.top nav { margin-left: auto; display: flex; gap: 20px; font-size: .87rem; }
+.top nav a { color: var(--dim); text-decoration: none; }
+.top nav a:hover { color: var(--ink); }
+@media (max-width: 740px) { .top nav .hide-sm { display: none; } }
+
+/* ---------- etiqueta de deteção ---------- */
+/* O motivo da pagina: uma etiqueta encostada ao canto de uma caixa. */
+
+.tag {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: .66rem;
+  font-weight: 600;
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  padding: 4px 9px;
+  background: var(--box);
+  color: var(--box-ink);
+}
+
+.tag-word { background: var(--word); color: var(--word-ink); }
+
+/* ---------- hero ---------- */
+
+.hero { padding: 60px 0 24px; }
+
+.hero h1 {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(2.3rem, 5.4vw, 3.9rem);
+  line-height: 1;
+  letter-spacing: -.035em;
+  max-width: 16ch;
+}
+
+.hero h1 .b { color: var(--box); }
+.hero h1 .w { color: var(--word); }
+
+.hero .lede {
+  margin-top: 22px;
+  font-size: 1.07rem;
+  color: var(--ink-2);
+  max-width: 58ch;
+}
+
+.cta { display: flex; flex-wrap: wrap; gap: 11px; margin-top: 28px; }
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 11px 19px;
+  font-family: var(--font-body);
+  font-size: .92rem;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--ink);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease;
+}
+
+.btn-solid { background: var(--ink); color: var(--ground); }
+.btn-solid:hover { background: var(--box); border-color: var(--box); color: var(--box-ink); }
+.btn-line { background: transparent; color: var(--ink); }
+.btn-line:hover { background: var(--ink); color: var(--ground); }
+
+/* ---------- visor ---------- */
+
+.viewer { margin: 40px 0 0; }
+
+.viewer-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: -1px;
+}
+
+.seg {
+  font-family: var(--font-mono);
+  font-size: .7rem;
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 8px 13px;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--dim);
+  cursor: pointer;
+  transition: background .15s ease, color .15s ease, border-color .15s ease;
+}
+
+.seg:hover { color: var(--ink); }
+.seg[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--ground); }
+
+.frame {
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  padding: 0;
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.frame svg { display: block; width: 100%; height: auto; }
+
+.det { transition: opacity .3s ease; }
+.det rect.bx { fill: none; stroke-width: 2.5; }
+.det text { font-family: var(--font-mono); font-size: 11px; font-weight: 600; }
+
+.capbar {
+  border-top: 1px solid var(--rule);
+  background: var(--word-wash);
+  padding: 13px 18px;
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  transition: opacity .3s ease;
+}
+
+.capbar .tag { flex: none; margin-top: 1px; }
+.capbar p { font-size: .9rem; color: var(--ink-2); font-style: italic; }
+
+.hidden { opacity: 0; pointer-events: none; }
+
+.viewer-note {
+  margin-top: 12px;
+  font-family: var(--font-mono);
+  font-size: .72rem;
+  color: var(--dim);
+  letter-spacing: .02em;
+}
+
+/* ---------- seções em caixa ---------- */
+
+.section { padding: 62px 0 0; }
+
+.box {
+  border: 1px solid var(--rule);
+  padding: 34px 32px 32px;
+  position: relative;
+  background: var(--surface);
+}
+
+.box > .tag { position: absolute; top: -11px; left: 22px; }
+
+.box h2 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: clamp(1.5rem, 3vw, 2.05rem);
+  letter-spacing: -.025em;
+  line-height: 1.1;
+}
+
+.box > * + * { margin-top: 18px; }
+.box p { color: var(--ink-2); max-width: 66ch; }
+.box p.tight { max-width: 62ch; }
+
+@media (max-width: 620px) {
+  .box { padding: 30px 20px 26px; }
+  .box > .tag { left: 14px; }
+}
+
+/* ---------- duas colunas: geometria vs linguagem ---------- */
+
+.duo { display: grid; grid-template-columns: repeat(auto-fit, minmax(258px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+.duo > div { background: var(--surface); padding: 22px 20px; }
+.duo h3 { font-family: var(--font-body); font-size: 1rem; font-weight: 700; margin-bottom: 4px; }
+.duo p { font-size: .92rem; }
+.duo .k { font-family: var(--font-mono); font-size: .68rem; letter-spacing: .12em; text-transform: uppercase; display: block; margin-bottom: 10px; }
+.duo .k-box { color: var(--box); }
+.duo .k-word { color: var(--word); }
+.duo ul { margin: 10px 0 0; padding-left: 18px; font-size: .9rem; color: var(--ink-2); }
+.duo li { padding: 2px 0; }
+
+/* ---------- tabelas ---------- */
+
+.tbl-wrap { overflow-x: auto; }
+
+table { border-collapse: collapse; width: 100%; font-size: .9rem; min-width: 420px; }
+th, td { text-align: left; padding: 10px 14px 10px 0; border-bottom: 1px solid var(--rule-soft); vertical-align: top; }
+th { font-family: var(--font-mono); font-size: .67rem; letter-spacing: .13em; text-transform: uppercase; color: var(--dim); font-weight: 600; }
+td:first-child { white-space: nowrap; padding-right: 22px; }
+td code { background: none; border: 0; padding: 0; color: var(--word); font-weight: 500; }
+tr:last-child td { border-bottom: 0; }
+
+/* ---------- filmstrip ---------- */
+
+.strip { display: flex; gap: 3px; margin-top: 6px; overflow-x: auto; padding-bottom: 6px; }
+
+.cell {
+  flex: 1 0 26px;
+  height: 52px;
+  border: 1px solid var(--rule);
+  background: var(--ground-alt);
+  position: relative;
+}
+
+.cell.key { background: var(--word-wash); border-color: var(--word); }
+.cell.key::after {
+  content: "";
+  position: absolute;
+  inset: 6px;
+  border: 1px solid var(--word);
+}
+.cell i {
+  position: absolute;
+  left: 4px; right: 4px; bottom: 4px;
+  height: 3px;
+  background: var(--box);
+  display: block;
+}
+
+.legend { display: flex; flex-wrap: wrap; gap: 18px; margin-top: 12px; font-family: var(--font-mono); font-size: .71rem; color: var(--dim); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.legend b { width: 11px; height: 11px; display: inline-block; }
+.legend .lb { background: var(--box); }
+.legend .lw { background: var(--word); }
+
+/* ---------- código ---------- */
+
+pre {
+  margin: 0;
+  background: var(--ground-alt);
+  border: 1px solid var(--rule);
+  padding: 16px 18px;
+  overflow-x: auto;
+  font-family: var(--font-mono);
+  font-size: .8rem;
+  line-height: 1.75;
+  color: var(--ink-2);
+}
+
+pre b { color: var(--ink); font-weight: 500; }
+pre .c { color: var(--dim); }
+pre .s { color: var(--word); }
+pre .n { color: var(--box); }
+
+/* ---------- stack ---------- */
+
+.chips { display: flex; flex-wrap: wrap; gap: 7px; }
+.chips span {
+  font-family: var(--font-mono);
+  font-size: .75rem;
+  padding: 6px 11px;
+  border: 1px solid var(--rule);
+  background: var(--ground-alt);
+  color: var(--ink-2);
+}
+
+/* ---------- rodapé ---------- */
+
+footer { margin-top: 66px; border-top: 1px solid var(--rule); padding: 34px 0 54px; }
+footer p { font-size: .86rem; color: var(--dim); }
+
+/* ---------- movimento ---------- */
+
+@keyframes draw { to { stroke-dashoffset: 0; } }
+@keyframes pop { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+
+.anim rect.bx { stroke-dasharray: 100; stroke-dashoffset: 100; animation: draw .7s ease forwards; }
+.anim g.lbl { opacity: 0; animation: pop .35s ease forwards; }
+
+/* o atraso tem de bater certo entre o grupo e a caixa que ele contem,
+   senao o traco desenha-se enquanto o grupo ainda esta invisivel */
+.anim g.lbl:nth-of-type(1), .anim g.lbl:nth-of-type(1) rect.bx { animation-delay: .10s; }
+.anim g.lbl:nth-of-type(2), .anim g.lbl:nth-of-type(2) rect.bx { animation-delay: .32s; }
+.anim g.lbl:nth-of-type(3), .anim g.lbl:nth-of-type(3) rect.bx { animation-delay: .54s; }
+
+@media (prefers-reduced-motion: reduce) {
+  .anim rect.bx { stroke-dashoffset: 0; animation: none; }
+  .anim g.lbl { opacity: 1; animation: none; }
+  * { transition: none !important; scroll-behavior: auto !important; }
+}
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <g id="va-mark">
+      <g fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="square">
+        <polyline points="4,20 4,4 20,4" />
+        <polyline points="44,4 60,4 60,20" />
+        <polyline points="60,44 60,60 44,60" />
+        <polyline points="20,60 4,60 4,44" />
+      </g>
+      <circle cx="32" cy="32" r="9" fill="currentColor" />
+    </g>
+  </defs>
+</svg>
+
+<header class="top">
+  <div class="wrap">
+    <a class="lockup" href="#top">
+      <svg class="mark" viewBox="0 0 64 64" style="color:var(--box)" aria-hidden="true"><use href="#va-mark" /></svg>
+      <span>Vision<span class="ai">AI</span></span>
+    </a>
+    <nav>
+      <a class="hide-sm" href="#modelos">Modelos</a>
+      <a class="hide-sm" href="#video">Vídeo</a>
+      <a class="hide-sm" href="#saidas">Saídas</a>
+      <a class="hide-sm" href="#correr">Correr</a>
+      <a href="https://github.com/cristovao-lavarinhas/VisionAI">GitHub&nbsp;&rarr;</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+
+  <!-- ============ HERO ============ -->
+  <section class="wrap hero">
+    <h1>Uma <span class="b">caixa</span> diz onde. Uma <span class="w">frase</span> diz o quê.</h1>
+
+    <p class="lede">
+      O VisionAI corre dois modelos sobre o mesmo ficheiro: o <strong>YOLOv8</strong>
+      devolve caixas, classes e confianças; o <strong>Florence-2</strong> devolve a
+      cena em linguagem natural. As duas leituras não competem — ficam lado a lado
+      no mesmo JSON. Funciona sobre imagem e sobre vídeo, com os modelos a correr
+      localmente.
+    </p>
+
+    <div class="cta">
+      <a class="btn btn-solid" href="https://github.com/cristovao-lavarinhas/VisionAI">Ver o código no GitHub</a>
+      <a class="btn btn-line" href="#modelos">Como funciona</a>
+    </div>
+
+    <!-- visor: alterna entre os tres modos reais da app -->
+    <div class="viewer">
+      <div class="viewer-bar" role="group" aria-label="Modo de operação">
+        <button type="button" class="seg" data-mode="hibrido" aria-pressed="true">YOLO + Florence-2</button>
+        <button type="button" class="seg" data-mode="yolo" aria-pressed="false">Apenas YOLO</button>
+        <button type="button" class="seg" data-mode="florence" aria-pressed="false">Apenas Florence-2</button>
+      </div>
+
+      <div class="frame">
+        <svg viewBox="0 0 760 400" role="img" aria-label="Ilustração de uma cena de rua com caixas de deteção sobre um peão, um carro e um semáforo.">
+          <!-- cena ilustrativa, desenhada — nao e uma captura da app -->
+          <rect x="0" y="0" width="760" height="400" fill="var(--ground-alt)" />
+          <rect x="0" y="286" width="760" height="114" fill="var(--rule-soft)" />
+          <rect x="0" y="286" width="760" height="2" fill="var(--rule)" />
+
+          <!-- predios ao fundo -->
+          <g fill="var(--rule-soft)" stroke="var(--rule)">
+            <rect x="40" y="96" width="118" height="190" />
+            <rect x="182" y="140" width="92" height="146" />
+            <rect x="588" y="118" width="126" height="168" />
+          </g>
+
+          <!-- semaforo -->
+          <g>
+            <rect x="654" y="150" width="34" height="80" rx="5" fill="var(--ink)" />
+            <rect x="668" y="230" width="6" height="56" fill="var(--ink)" />
+            <circle cx="671" cy="170" r="9" fill="#d9490c" />
+            <circle cx="671" cy="192" r="9" fill="#e8b533" />
+            <circle cx="671" cy="212" r="9" fill="#3fa564" />
+          </g>
+
+          <!-- carro -->
+          <g>
+            <path d="M300 286 L300 236 Q300 226 312 226 L360 226 L386 196 L462 196 L482 226 L520 226 Q532 226 532 238 L532 286 Z" fill="var(--ink)" opacity=".82" />
+            <path d="M394 204 L456 204 L472 226 L394 226 Z" fill="var(--ground-alt)" opacity=".85" />
+            <circle cx="346" cy="286" r="22" fill="var(--ink)" />
+            <circle cx="346" cy="286" r="9" fill="var(--ground-alt)" />
+            <circle cx="492" cy="286" r="22" fill="var(--ink)" />
+            <circle cx="492" cy="286" r="9" fill="var(--ground-alt)" />
+          </g>
+
+          <!-- peao -->
+          <g fill="var(--ink)" opacity=".88">
+            <circle cx="176" cy="164" r="19" />
+            <path d="M176 186 Q198 190 200 226 L200 250 L152 250 L152 226 Q154 190 176 186 Z" />
+            <rect x="158" y="250" width="14" height="44" rx="5" />
+            <rect x="180" y="250" width="14" height="44" rx="5" />
+          </g>
+
+          <!-- caixas de detecao -->
+          <g class="det" id="det">
+            <g class="lbl">
+              <rect class="bx" pathLength="100" x="140" y="140" width="76" height="158" stroke="var(--box)" />
+              <rect x="140" y="122" width="106" height="18" fill="var(--box)" />
+              <text x="146" y="135" fill="var(--box-ink)">person 0.94</text>
+            </g>
+            <g class="lbl">
+              <rect class="bx" pathLength="100" x="286" y="184" width="262" height="126" stroke="var(--box)" />
+              <rect x="286" y="166" width="78" height="18" fill="var(--box)" />
+              <text x="292" y="179" fill="var(--box-ink)">car 0.91</text>
+            </g>
+            <g class="lbl">
+              <rect class="bx" pathLength="100" x="642" y="138" width="58" height="156" stroke="var(--box)" />
+              <rect x="642" y="120" width="128" height="18" fill="var(--box)" />
+              <text x="648" y="133" fill="var(--box-ink)">traffic light 0.77</text>
+            </g>
+          </g>
+        </svg>
+
+        <div class="capbar" id="cap">
+          <span class="tag tag-word">Florence-2</span>
+          <p>Uma pessoa está parada num passeio ao lado de um carro escuro estacionado, com um semáforo à direita e prédios ao fundo.</p>
+        </div>
+      </div>
+
+      <p class="viewer-note">Ilustração do resultado — cena desenhada, não é uma captura da app.</p>
+    </div>
+  </section>
+
+  <!-- ============ MODELOS ============ -->
+  <section class="wrap section" id="modelos">
+    <div class="box">
+      <span class="tag">Dois modelos</span>
+      <h2>Geometria de um lado, linguagem do outro.</h2>
+      <p class="tight">
+        A divisão de trabalho é o projeto inteiro. Um dos modelos sabe apontar,
+        o outro sabe descrever, e nenhum faz bem o trabalho do outro.
+      </p>
+
+      <div class="duo">
+        <div>
+          <span class="k k-box">Geometria</span>
+          <h3>YOLOv8</h3>
+          <p>Para cada objeto devolve uma classe, uma confiança e quatro coordenadas. Barato de correr.</p>
+          <ul>
+            <li>Limiar de confiança de 0,1 a 1,0</li>
+            <li>Pesos <code>yolov8n.pt</code> versionados no repo</li>
+            <li>Corre em todos os frames de vídeo</li>
+          </ul>
+        </div>
+        <div>
+          <span class="k k-word">Linguagem</span>
+          <h3>Florence-2</h3>
+          <p>Devolve texto sobre a cena. É o modelo caro — e é isso que molda o processamento de vídeo.</p>
+          <ul>
+            <li><code>microsoft/Florence-2-base-ft</code></li>
+            <li>Arquitetura vem do repo do modelo, via <code>trust_remote_code</code></li>
+            <li>float16 com CUDA, float32 em CPU</li>
+          </ul>
+        </div>
+      </div>
+
+      <p class="tight">
+        O Florence-2 não tem uma saída só — recebe uma tarefa e responde em
+        conformidade. A app usa quatro:
+      </p>
+
+      <div class="tbl-wrap">
+        <table>
+          <thead>
+            <tr><th>Tarefa</th><th>Para quê</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>&lt;MORE_DETAILED_CAPTION&gt;</code></td><td>Descrição longa da cena inteira</td></tr>
+            <tr><td><code>&lt;OD&gt;</code></td><td>Deteção pelo lado do Florence-2, para comparar com a do YOLO</td></tr>
+            <tr><td><code>&lt;DENSE_REGION_CAPTION&gt;</code></td><td>Uma legenda por região, não uma por imagem</td></tr>
+            <tr><td><code>&lt;CAPTION&gt;</code></td><td>Versão curta, usada nos frames de vídeo</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ VIDEO ============ -->
+  <section class="wrap section" id="video">
+    <div class="box">
+      <span class="tag tag-word">Vídeo</span>
+      <h2>O custo é que manda no ritmo.</h2>
+      <p class="tight">
+        Correr o Florence-2 em cada frame seria insustentável, e desnecessário: a
+        cena não muda de frase de um frame para o outro. Por isso os dois modelos
+        andam a cadências diferentes.
+      </p>
+
+      <div>
+        <div class="strip" id="strip" aria-hidden="true"></div>
+        <div class="legend">
+          <span><b class="lb"></b> YOLO — todos os frames</span>
+          <span><b class="lw"></b> Florence-2 — a cada N frames (15 a 90, 30 por omissão)</span>
+        </div>
+      </div>
+
+      <p class="tight">
+        Nos frames intermédios a última legenda é reutilizada e gravada na imagem.
+        Se uma chamada ao Florence-2 falhar, o frame não fica sem legenda: mantém
+        a anterior e o processamento segue em vez de rebentar a meio de um vídeo
+        longo.
+      </p>
+      <p class="tight">
+        A legenda é quebrada por palavras à largura do frame e cortada às três
+        linhas, sobre um retângulo opaco — nunca sai fora da imagem, seja qual for
+        o tamanho do vídeo.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ SAIDAS ============ -->
+  <section class="wrap section" id="saidas">
+    <div class="box">
+      <span class="tag">Saídas</span>
+      <h2>Tudo o que sai, sai em ficheiro.</h2>
+      <p class="tight">
+        Nada fica preso ao ecrã. Cada análise produz um JSON, e o vídeo sai também
+        como MP4 com as anotações gravadas na imagem.
+      </p>
+
+<pre><span class="c">// imagem, modo híbrido</span>
+{
+  <span class="s">"yolo_deteccoes"</span>: {
+    <span class="s">"total_objetos"</span>: <span class="n">3</span>,
+    <span class="s">"classes"</span>: { <span class="s">"person"</span>: <span class="n">1</span>, <span class="s">"car"</span>: <span class="n">1</span>, <span class="s">"traffic light"</span>: <span class="n">1</span> },
+    <span class="s">"deteccoes"</span>: [
+      { <span class="s">"classe"</span>: <span class="s">"person"</span>, <span class="s">"confianca"</span>: <span class="n">0.94</span>, <span class="s">"bbox"</span>: [<span class="n">140</span>, <span class="n">140</span>, <span class="n">216</span>, <span class="n">298</span>] }
+    ]
+  },
+  <span class="s">"florence_analise"</span>: {
+    <span class="s">"descricao_detalhada"</span>: <span class="s">"..."</span>,
+    <span class="s">"objetos_detectados"</span>: { <span class="c">/* &lt;OD&gt; */</span> },
+    <span class="s">"regioes_densas"</span>: { <span class="c">/* &lt;DENSE_REGION_CAPTION&gt; */</span> }
+  }
+}</pre>
+
+      <p class="tight">
+        No vídeo, o JSON é uma entrada por frame — índice, tempo em segundos,
+        contagem de objetos, contagem por classe e a legenda em vigor — e a app
+        mostra ainda o total de objetos, a média por frame e quantos frames foram
+        analisados.
+      </p>
+    </div>
+  </section>
+
+  <!-- ============ CORRER ============ -->
+  <section class="wrap section" id="correr">
+    <div class="box">
+      <span class="tag">Correr</span>
+      <h2>Dois comandos.</h2>
+
+<pre><b>pip install -r requirements.txt</b>
+<b>streamlit run app.py</b></pre>
+
+      <p class="tight">
+        Abre em <code>localhost:8501</code>. Os pesos do YOLOv8 nano estão no
+        repositório; o Florence-2 é descarregado do Hugging Face na primeira
+        utilização, cerca de meio gigabyte, uma vez só. Sem GPU corre à mesma, em
+        float32 sobre CPU — mais lento, mas funciona.
+      </p>
+
+      <div class="chips">
+        <span>Streamlit</span><span>Ultralytics YOLOv8</span><span>Florence-2</span>
+        <span>Transformers</span><span>PyTorch</span><span>OpenCV</span><span>Pillow</span>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer>
+  <div class="wrap">
+    <a class="lockup" href="#top" style="margin-bottom:10px">
+      <svg class="mark" viewBox="0 0 64 64" style="color:var(--box)" aria-hidden="true"><use href="#va-mark" /></svg>
+      <span>Vision<span class="ai">AI</span></span>
+    </a>
+    <p>Projeto académico &mdash; Projeto III, 2025/2026.</p>
+  </div>
+</footer>
+
+<script>
+(function () {
+  "use strict";
+
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  /* ---------- visor: os tres modos da app ---------- */
+
+  var det = document.getElementById("det");
+  var cap = document.getElementById("cap");
+  var segs = Array.prototype.slice.call(document.querySelectorAll(".seg"));
+
+  function apply(mode) {
+    det.classList.toggle("hidden", mode === "florence");
+    cap.classList.toggle("hidden", mode === "yolo");
+  }
+
+  segs.forEach(function (b) {
+    b.addEventListener("click", function () {
+      segs.forEach(function (o) { o.setAttribute("aria-pressed", "false"); });
+      b.setAttribute("aria-pressed", "true");
+      apply(b.getAttribute("data-mode"));
+    });
+  });
+
+  /* ---------- filmstrip: YOLO em todos, Florence a cada N ---------- */
+
+  var N = 6;                                  // proporcao ilustrativa
+  var strip = document.getElementById("strip");
+  var html = "";
+  for (var i = 0; i < 30; i++) {
+    html += '<div class="cell' + (i % N === 0 ? " key" : "") + '"><i></i></div>';
+  }
+  strip.innerHTML = html;
+
+  /* ---------- desenho das caixas ao entrar em vista ---------- */
+
+  function whenVisible(el, fn) {
+    var done = false;
+    function once() { if (done) { return; } done = true; fn(); }
+    if ("IntersectionObserver" in window) {
+      var io = new IntersectionObserver(function (es) {
+        es.forEach(function (e) { if (e.isIntersecting) { io.disconnect(); once(); } });
+      }, { threshold: 0.25 });
+      io.observe(el);
+    }
+    setTimeout(once, 2000);                   // rede de seguranca
+  }
+
+  if (!reduce) {
+    whenVisible(det, function () { det.classList.add("anim"); });
+  } else {
+    det.classList.add("anim");
+  }
+})();
+</script>
+
+</body>
+</html>
